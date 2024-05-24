@@ -1,20 +1,16 @@
 from typing import Any, Literal, Mapping
-import random
 import torch
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 import torch.nn as nn
 import lightning as pl
-from model.utils import add_noise, build_mask, build_mask_from_data
-from model.loss_functions import PreTrainingLoss, ImputationLoss, ForecastingLoss, BinaryClassLoss
-from model.multiHeadAttention import MultiHeadedAttention
-from model.metrics import calc_metrics
-from embedding.positional_embedding import DataEmbedding
-
-from eval_utils.plot import compare_ts
-import seaborn as sns
+from architecture.utils import add_noise, build_mask, build_mask_from_data
+from architecture.loss_functions import PreTrainingLoss, ImputationLoss, ForecastingLoss, BinaryClassLoss
+from architecture.multiHeadAttention import MultiHeadedAttention
+from architecture.metrics import calc_metrics
+from embedding.data_embedding import DataEmbedding
 
 
-class ModuleEncoderStandard(pl.LightningModule):
+class EncodingLayer(pl.LightningModule):
 
     def __init__(self,
                  h: int,
@@ -25,39 +21,39 @@ class ModuleEncoderStandard(pl.LightningModule):
                  mask_offset: int,
                  attention_func: Literal["classic", "propsparse", "propsparse_entmax15"],
                  add_pooled_representations: bool = False,
-                 ts_attention=True,
                  clip_data=0,
-                 split_feature_encoding=False,
                  feature_dimension=1,
                  **kwargs):
         super().__init__()
         data_window_size = data_window_size + (2 * clip_data)
         self._self_attention = MultiHeadedAttention(encoding_size=encoding_size, h=h, dropout=dropout,
-                                                    attention_func=attention_func, ts_attention=ts_attention,
-                                                    split_feature_encoding=split_feature_encoding,
+                                                    attention_func=attention_func,
                                                     feature_dimension=feature_dimension,
                                                     **kwargs)
         self.single_feature_encoding = encoding_size
-        if split_feature_encoding:
-            encoding_size *= feature_dimension
+
+        encoding_size *= feature_dimension
 
         self._dropout = nn.Dropout(p=dropout)
-        self.ts_attention = ts_attention
         self.representation_layers = nn.ModuleList()
         self.merge_layers = nn.ModuleList()
         self.pools = nn.ModuleList()
         conv_size = 0
+
+        # build representation and merge layers
         for ks, dl, groups in conv_dims:
-            if groups == -1:
+            if groups == -1: # depthwise convolution
                 groups = encoding_size
 
+            # calculate actual kernel size. ks includes coverage of time series in percent
             kernel_s = int((int(data_window_size * ks) - 1 + dl) / dl)
 
-            stride = max(kernel_s // 4, 1)
+            stride = max(kernel_s // 2, 1)
             conv_size_layer = self.conv_output_dimension(data_window_size, dl, 0, kernel_s, stride)
             trans_size_layer = self.transpose_output_dimension(conv_size_layer, dl, 0, kernel_s, stride)
             conv_size += conv_size_layer
 
+            # representation CNN
             repr_conv = nn.Conv1d(in_channels=encoding_size,
                                   out_channels=encoding_size,
                                   kernel_size=kernel_s,
@@ -66,6 +62,7 @@ class ModuleEncoderStandard(pl.LightningModule):
                                   groups=groups)
             self.representation_layers.append(repr_conv)
 
+            # relative transpose conv to revert convolution
             t_conv = nn.ConvTranspose1d(in_channels=encoding_size,
                                         out_channels=encoding_size,
                                         kernel_size=kernel_s,
@@ -75,6 +72,7 @@ class ModuleEncoderStandard(pl.LightningModule):
                                         groups=groups)
             self.merge_layers.append(t_conv)
 
+            # max pool layers to extract features from output of cnn layers
             if add_pooled_representations:
                 stride = 3
                 kernel_s = 3
@@ -83,6 +81,7 @@ class ModuleEncoderStandard(pl.LightningModule):
                                                stride=stride))
                 conv_size += int((int(conv_size_layer - (kernel_s - 1) - 1) / stride) + 1)
 
+        # resulting matrix length (R)
         self.conv_size = conv_size
 
         self.fin_ff = nn.Linear(encoding_size * len(conv_dims), encoding_size)
@@ -93,7 +92,7 @@ class ModuleEncoderStandard(pl.LightningModule):
         self._layerNorm1 = nn.GroupNorm(num_channels=encoding_size, num_groups=feature_dimension)
         self._layerNorm2 = nn.GroupNorm(num_channels=encoding_size, num_groups=feature_dimension)
 
-    def forward(self, data: torch.Tensor, mask, global_residual) -> (torch.Tensor, torch.Tensor):
+    def forward(self, data: torch.Tensor, global_residual) -> (torch.Tensor, torch.Tensor):
         representations = [nn.functional.elu(repr_layer(data.transpose(-1, -2))) for repr_layer in
                            self.representation_layers]
 
@@ -134,13 +133,12 @@ class ModuleEncoderStandard(pl.LightningModule):
 
         x = torch.cat(x, dim=-1)
 
-        reverse_attn = self.reverse_attn_dim(attn.sum(2), representations,
-                                             feature_encoding=self.single_feature_encoding, size=data.shape[1])
+        reverse_attn = self.reverse_attn_dim(attn.sum(2), representations, size=data.shape[1])
 
         x = self.fin_ff(x)
         return x, attn, reverse_attn, global_residual
 
-    def reverse_attn_dim(self, x, representations, size, feature_encoding):
+    def reverse_attn_dim(self, x, representations, size):
 
         x = (x - x.min()) / (x.max() - x.min())
         splits = torch.split(x, representations, dim=1)
@@ -151,8 +149,6 @@ class ModuleEncoderStandard(pl.LightningModule):
                                                  torch.ones((x.shape[-1], x.shape[-1],
                                                              self.representation_layers[i].kernel_size[0]),
                                                             device=x.device) / self.representation_layers[i].kernel_size[0],
-                                                 # torch.ones((repr_layers[i].transpose(-1, -2).shape[-1], *self.representation_layers[i].weight.data.shape[1:3]),
-                                                 #                             device=repr_layers[i].device),
                                                  dilation=self.representation_layers[i].dilation,
                                                  stride=self.representation_layers[i].stride,
                                                  groups=1).transpose(-1,-2)
@@ -191,44 +187,6 @@ class PositionalFeedforward(pl.LightningModule):
         data = self.lin1(data.transpose(-1, -2))
         data = self.lin2(data)
         return nn.functional.relu(self.lin3(data)).transpose(-1, -2)
-
-
-class Classifier(pl.LightningModule):
-
-    def __init__(self,
-                 classifier_kernel_1,
-                 classifier_kernel_2,
-                 classifier_pool_1,
-                 classifier_pool_2,
-                 **kwargs
-                 ):
-        super(Classifier, self).__init__()
-
-        self.conv1 = nn.Conv1d(in_channels=1, out_channels=1, kernel_size=classifier_kernel_1, padding=1)
-        self.conv2 = nn.Conv1d(in_channels=1, out_channels=1, kernel_size=classifier_kernel_2, padding=1)
-
-        self.pool1 = nn.MaxPool1d(kernel_size=classifier_pool_1)
-        self.pool2 = nn.MaxPool1d(kernel_size=classifier_pool_2)
-
-    def forward(self, attn):
-        result = self.pool1(nn.functional.elu(self.conv1(attn.unsqueeze(-1).permute(0, 2, 1))))
-        result = self.pool2(nn.functional.elu(self.conv2(result)))
-        return result
-
-
-class FinalClassifier(pl.LightningModule):
-
-    def __init__(self, input_size: int, output_size: int, final_classifier_hidden_size: int, **kwargs):
-        super().__init__()
-        self.lin1 = nn.Linear(input_size, final_classifier_hidden_size)
-        self.lin2 = nn.Linear(final_classifier_hidden_size, final_classifier_hidden_size)
-        self.lin3 = nn.Linear(final_classifier_hidden_size, output_size)
-
-    def forward(self, classification) -> Any:
-        classification = nn.functional.elu(self.lin1(classification))
-        classification = nn.functional.elu(self.lin2(classification))
-        classification = nn.functional.sigmoid(self.lin3(classification))
-        return classification
 
 
 class AttnMapClassification(pl.LightningModule):
@@ -280,7 +238,7 @@ class AttnMapClassification(pl.LightningModule):
 
 class EncoderConvPretrain(pl.LightningModule):
 
-    def __init__(self, config: dict, scaler, learning_rate: float = None, ts_attention=True):
+    def __init__(self, config: dict, scaler, learning_rate: float = None):
         super().__init__()
 
         self.scaler = scaler
@@ -295,32 +253,25 @@ class EncoderConvPretrain(pl.LightningModule):
         self.loss = PreTrainingLoss(config)
         self.res_dropout = nn.Dropout(config["dropout"])
 
-        # self.encoding_ff = nn.Linear(self.feature_dimension, self.encoding_size)
         self.encoding_ff = DataEmbedding(config)
 
         self.layers_encoding = nn.ModuleList([
-            ModuleEncoderStandard(ts_attention=ts_attention, **config)
+            EncodingLayer(**config)
             for _ in range(config["N"])
         ])
 
-        self.layers_classifier = nn.ModuleList([
-            Classifier(**config)
-            for _ in range(config["N"])
-        ])
 
         self.fin_ff = nn.Linear(self.encoding_size, self.feature_dimension, bias=False) \
             if not config.get("split_feature_encoding", False) \
             else nn.ModuleList([nn.Linear(self.encoding_size, 1, bias=False)
                                 for _ in range(config["feature_dimension"])])
 
-        final_dim = ((self.layers_encoding[0].conv_size if ts_attention else self.encoding_size // self.h) // (
-                config["classifier_pool_1"] * config["classifier_pool_2"])) * \
-                    config["N"]
+        final_dim = ((self.encoding_size // self.h) // (
+                config["classifier_pool_1"] * config["classifier_pool_2"])) * config["N"]
         self.final_dim = final_dim
 
         self.attn_map_classification = config.get("attn_map_classification", False)
-        self.final_classifier = FinalClassifier(input_size=final_dim, output_size=1, **config) \
-            if not self.attn_map_classification else AttnMapClassification(self.layers_encoding[0].conv_size, **config)
+        self.final_classifier = AttnMapClassification(self.layers_encoding[0].conv_size, **config)
 
     def forward(self, x: torch.Tensor, embedding=None, mask=None):
 
@@ -337,28 +288,16 @@ class EncoderConvPretrain(pl.LightningModule):
             encoding, attn, reverse_attn, residual = self.layers_encoding[i](encoding, mask, residual)
 
             reverse_attn_list.append([self.de_clip_data(entry)
-                                      for entry in torch.split(reverse_attn, self.encoding_size if not self.config.get(
-                    "depthwise_conv", False) else self.feature_dimension, dim=-1)][0])
+                                      for entry in torch.split(reverse_attn, self.feature_dimension, dim=-1)][0])
 
-            if self.attn_map_classification is None:
-                classification = self.layers_classifier[i](attn)
-                classifications.append(classification)
-            else:
-                classifications.append(attn.sum(-2))
+            classifications.append(attn.sum(-2))
 
-        if not self.attn_map_classification:
-            classification = torch.cat(classifications, dim=-1).squeeze(1)
-            classification_result = self.final_classifier(classification).squeeze(-1)
+        classification_result = self.final_classifier(classifications)
 
-        else:
-            classification_result = self.final_classifier(classifications)
 
-        if not self.config.get("split_feature_encoding", False):
-            encoding = self.fin_ff(encoding)
-        else:
-            splits = torch.split(encoding, self.encoding_size, dim=-1)
-            splits = [self.fin_ff[i](splits[i]) for i in range(len(splits))]
-            encoding = torch.cat(splits, dim=-1)
+        splits = torch.split(encoding, self.encoding_size, dim=-1)
+        splits = [self.fin_ff[i](splits[i]) for i in range(len(splits))]
+        encoding = torch.cat(splits, dim=-1)
 
         attn_map = [torch.cat(entry, -1) for entry in zip(*[torch.split(reverse_attn_list[i], 1, dim=-1)
                                                             for i in range(len(reverse_attn_list))])]

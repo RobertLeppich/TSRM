@@ -1,0 +1,10 @@
+
+
+# Data
+data_window_size: 24
+
+missing_ratio: 0.1
+
+# Loss
+loss_function_imputation: mse+mae
+loss_imputation_mode: imputation

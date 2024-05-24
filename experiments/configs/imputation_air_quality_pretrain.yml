@@ -1,0 +1,47 @@
+
+
+# Data
+data_window_size: 24
+
+# Pre-train
+noise_count_fraction: 0.2
+
+# Training
+lr_optimizer: true
+dropout: 0.25
+validation_size: 0.2
+test_size: 0.3
+optimizer: adam
+batch_size: 16
+shuffle: true
+shuffle_seed: 42
+
+feature_dimension: 11
+add_pooled_representations: true
+
+# Model
+h: 4
+encoding_size: 16
+N: 3
+conv_dims: [[0.1, 1, -1], [0.2, 1, -1], [0.6, 1, -1]]
+attention_func: "propsparse"
+add_embedding: true
+
+
+# Masking
+mask_size: 2
+mask_var_length: 1
+mask_count: 4
+mask_offset: 1
+
+# Loss
+loss_function_imputation: mse+mae
+loss_imputation_mode: weighted_imputation
+loss_weight_alpha: 3.5
+loss_weight_beta: 1.2
+loss_weight_gamma: 5
+
+# Early stopping
+earlystopping_patience: 3
+earlystopping_min_delta: .01
+earlystopping_percentage: True
