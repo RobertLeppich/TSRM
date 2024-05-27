@@ -27,7 +27,8 @@ class ExperimentRun:
         self.task = task
         self.config_str = config_str
         self.config_pretrain = yaml.safe_load(open(f"experiments/configs/{config_str}_pretrain.yml"))
-        self.config_finetune = self.config_pretrain.update(yaml.safe_load(open(f"experiments/configs/{config_str}_finetune.yml")))
+        self.config_finetune = yaml.safe_load(open(f"experiments/configs/{config_str}_pretrain.yml"))
+        self.config_finetune.update(yaml.safe_load(open(f"experiments/configs/{config_str}_finetune.yml")))
 
         self.run_id = self.generate_run_id()
         self.exp_id = None
@@ -42,7 +43,7 @@ class ExperimentRun:
 
     def run(self, dry_run=True, **kwargs):
         try:
-            self.pre_train(dry_run=dry_run)
+            # self.pre_train(dry_run=dry_run)
 
             self.fine_tune(dry_run=dry_run, **kwargs)
 
@@ -98,8 +99,8 @@ class ExperimentRun:
         logger = TensorBoardLogger(path, name="log")
         logger.log_hyperparams(config)
 
-        trainer = pl.Trainer(devices=1, accelerator="gpu", max_epochs=300, log_every_n_steps=20,
-                             callbacks=[early_stopping] + [checkpoint_callback]
+        trainer = pl.Trainer(devices=1, accelerator="gpu", log_every_n_steps=40,
+                             callbacks=([early_stopping] + [checkpoint_callback])
                              if not config["dry_run"] else [DeviceStatsMonitor(cpu_stats=True)],
                              default_root_dir=path, logger=logger, profiler="simple" if config["dry_run"] else None)
 
@@ -120,7 +121,10 @@ class ExperimentRun:
         return mets
 
     def fine_tune(self, dry_run=True, **kwargs):
-        checkpoints = [chkp for chkp in os.listdir(self.create_log_path("pretrain")) if chkp.endswith("ckpt")]
+        self.config_finetune["dry_run"] = dry_run
+
+        checkpoints = [chkp for chkp in os.listdir(self.create_log_path("pretrain"))
+                       if chkp.endswith("ckpt") and "epoch" in chkp]
         if len(checkpoints) == 0:
             raise IOError("Could not find checkpoints of pretrained model")
         checkpoint = checkpoints[0]
@@ -145,13 +149,13 @@ class ExperimentRun:
 
     def run_config_fine_tune(self, config, checkpoint):
         dataset = self.dataset(config)
-        path = self.create_log_path(config, "finetune")
+        path = self.create_log_path("finetune")
 
         metrics = []
         split_num = 0
         for train_loader, val_loader, test_loader in dataset.cv_split():
             model = model_dict[self.task].load_from_checkpoint(
-                self.create_log_path(self.config_pretrain, "pretrain") + f"/{checkpoint}",
+                self.create_log_path("pretrain") + f"/{checkpoint}",
                 config=config, scaler=dataset.scaler)
 
             early_stopping = EarlyStopping(monitor="loss",
@@ -162,7 +166,7 @@ class ExperimentRun:
             logger = TensorBoardLogger(path, name="log")
 
 
-            trainer = pl.Trainer(devices=1, accelerator="gpu", max_epochs=300, log_every_n_steps=20,
+            trainer = pl.Trainer(devices=1, accelerator="gpu", log_every_n_steps=40,
                                  callbacks=[early_stopping] + (
                                      [checkpoint_callback] if not config["dry_run"] else []),
                                  default_root_dir=path, logger=logger)

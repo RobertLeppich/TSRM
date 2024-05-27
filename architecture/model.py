@@ -360,7 +360,7 @@ class TimeSeriesRepresentationModel(pl.LightningModule):
             input_data, input_target, meta, embedding = input_batch
 
         loss = self._run(input_data, input_target, meta, embedding, determine_metrics=True,
-                         calc_real=self.config["minmax_scaled"])
+                         calc_real=self.config.get("minmax_scaled", False))
         return loss
 
     def _run(self, input_data, input_target, meta, embedding=None, determine_metrics=True, calc_real=False):
