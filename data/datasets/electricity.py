@@ -5,7 +5,6 @@ from torch.utils.data import DataLoader
 
 class ElectricityImputationSpecificSplitUnivariate:
     def __init__(self, config, **kwargs):
-        super().__init__(config, **kwargs)
         self.config = config
 
     def load_data(self):

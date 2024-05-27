@@ -1,16 +1,17 @@
 import os
 from setups import *
-from data.download import download_preprocessed_data
 
 def run_experiments():
 
-    if not os.path.exists("data_dir") or len(os.listdir("data_dir")):
-        # download data first
-        download_preprocessed_data()
+    if not os.path.exists("data/data_dir") or len(os.listdir("data/data_dir")):
+        print("Download data first at: https://drive.google.com/drive/folders/1Sw6LClDcYhy5byltrezagiap9a5sGIfH "
+              "and save into 'data/data_dir' folder")
+        os.makedirs("data/data_dir", exist_ok=True)
+        exit(0)
 
     # Imputation experiments
-    imputation_electricity.run()
     imputation_air_quality.run()
+    imputation_electricity.run()
 
     # forecasting experiments
     forecasting_electricity.run()

@@ -212,10 +212,6 @@ class MultiHeadedAttention(nn.Module):
         key = lin_key(key).view(nbatches, -1, self.h, self.encoding_size // self.h).transpose(1, 2)
         value = lin_values(value).view(nbatches, -1, self.h, self.encoding_size // self.h).transpose(1, 2)
 
-        query = query.transpose(-1, -2)
-        key = key.transpose(-1, -2)
-        value = value.transpose(-1, -2)
-
         # 2) Apply attention on all the projected vectors in batch.
         x, attn = attention(query, key, value, mask=mask,
                                  dropout=self.dropout)

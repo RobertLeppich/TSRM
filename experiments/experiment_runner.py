@@ -1,6 +1,6 @@
 import torch
 from lightning.pytorch.callbacks import DeviceStatsMonitor
-from model.encoder_convolution import EncoderConvPretrain, model_dict
+from architecture.model import TimeSeriesRepresentationModel, model_dict
 from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint, Timer
 from lightning.pytorch.loggers import TensorBoardLogger
 from lightning.pytorch.tuner import Tuner
@@ -89,7 +89,7 @@ class ExperimentRun:
 
         train_loader, validation_loader, test_loader = dataset.get_pretrain_loader()
 
-        model = EncoderConvPretrain(config=config, scaler=dataset.scaler)
+        model = TimeSeriesRepresentationModel(config=config, scaler=dataset.scaler)
 
         early_stopping = EarlyStopping(monitor="loss",
                                        min_delta=config["earlystopping_min_delta"],

@@ -87,11 +87,7 @@ class DataEmbedding(nn.Module):
         c_in, d_model = config["feature_dimension"], config["encoding_size"]
         super(DataEmbedding, self).__init__()
 
-        self.split_feature_encoding = config.get("split_feature_encoding", False)
-        if not self.split_feature_encoding:
-            self.value_embedding = nn.Linear(c_in, d_model, bias=False)
-        else:
-            self.value_embedding = nn.ModuleList([nn.Linear(1, d_model, bias=False)
+        self.value_embedding = nn.ModuleList([nn.Linear(1, d_model, bias=False)
                                                   for _ in range(config["feature_dimension"])])
 
         self.pos_encoding_activated = config.get("add_embedding", False)
@@ -104,22 +100,11 @@ class DataEmbedding(nn.Module):
 
 
     def forward(self, x, x_mark):
-        if self.split_feature_encoding:
-            return self.split_forward(x, x_mark)
-
-        result = self.value_embedding(x)
-
-        if self.pos_encoding_activated:
-            result[:,:, :] += self.temporal_embedding(x_mark)
-            #result[:,:, :] += self.positional_embedding(x)
-        return result
-
-    def split_forward(self, x, x_mark):
         result = []
         for i in range(x.shape[-1]):
             x_i = self.value_embedding[i](x[:, :, [i]])
             if self.pos_encoding_activated:
                 x_i[:, :, :] += self.temporal_embedding(x_mark)
-                #x_i[:, :, :] += self.positional_embedding(x[:, :, [i]])
+                # x_i[:, :, :] += self.positional_embedding(x[:, :, [i]])
             result.append(x_i)
         return torch.cat(result, dim=-1)

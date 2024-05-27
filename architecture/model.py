@@ -42,13 +42,13 @@ class EncodingLayer(pl.LightningModule):
 
         # build representation and merge layers
         for ks, dl, groups in conv_dims:
-            if groups == -1: # depthwise convolution
+            if groups == -1:  # depthwise convolution
                 groups = encoding_size
 
             # calculate actual kernel size. ks includes coverage of time series in percent
             kernel_s = int((int(data_window_size * ks) - 1 + dl) / dl)
 
-            stride = max(kernel_s // 2, 1)
+            stride = max(kernel_s // 4, 1)
             conv_size_layer = self.conv_output_dimension(data_window_size, dl, 0, kernel_s, stride)
             trans_size_layer = self.transpose_output_dimension(conv_size_layer, dl, 0, kernel_s, stride)
             conv_size += conv_size_layer
@@ -129,7 +129,7 @@ class EncodingLayer(pl.LightningModule):
 
         x = torch.split(x, representations, dim=1)
         x = [self.merge_layers[i](x[i].transpose(-1, -2)).transpose(-1, -2)
-                  for i in range(len(self.representation_layers))]
+             for i in range(len(self.representation_layers))]
 
         x = torch.cat(x, dim=-1)
 
@@ -148,10 +148,11 @@ class EncodingLayer(pl.LightningModule):
         merged = [nn.functional.conv_transpose1d(repr_layers[i].transpose(-1, -2),
                                                  torch.ones((x.shape[-1], x.shape[-1],
                                                              self.representation_layers[i].kernel_size[0]),
-                                                            device=x.device) / self.representation_layers[i].kernel_size[0],
+                                                            device=x.device) /
+                                                 self.representation_layers[i].kernel_size[0],
                                                  dilation=self.representation_layers[i].dilation,
                                                  stride=self.representation_layers[i].stride,
-                                                 groups=1).transpose(-1,-2)
+                                                 groups=1).transpose(-1, -2)
                   for i in range(len(repr_layers))]
         merged = [entry if entry.shape[1] == size else
                   nn.functional.pad(entry.transpose(-1, -2), (size - entry.shape[1], 0)).transpose(-1, -2)
@@ -213,16 +214,17 @@ class AttnMapClassification(pl.LightningModule):
         self.channel_lin_2 = nn.ModuleList(
             [nn.Linear(in_features=map_size * 2, out_features=1) for _ in range(feature_dimension)])
 
-        self.final_lin1 = nn.Linear(N*feature_dimension, N * feature_dimension)
+        self.final_lin1 = nn.Linear(N * feature_dimension, N * feature_dimension)
         self.final_lin2 = nn.Linear(N * feature_dimension, N)
         self.final_lin3 = nn.Linear(N, 1)
 
     def forward(self, classification_maps):
         # NxFeatures
         classification_maps = [torch.cat(channel, dim=-1) for channel in
-                    zip(*[torch.split(entry, 1, dim=-1) for entry in classification_maps])]
+                               zip(*[torch.split(entry, 1, dim=-1) for entry in classification_maps])]
         for i in range(len(self.conv1)):
-            classification_maps[i] = self.pool1(nn.functional.elu(self.conv1[i](classification_maps[i].transpose(1, -1))))
+            classification_maps[i] = self.pool1(
+                nn.functional.elu(self.conv1[i](classification_maps[i].transpose(1, -1))))
         for i in range(len(self.conv1)):
             classification_maps[i] = self.pool2(nn.functional.elu(self.conv2[i](classification_maps[i])))
         for i in range(len(self.conv1)):
@@ -236,9 +238,9 @@ class AttnMapClassification(pl.LightningModule):
         return self.final_lin3(result).squeeze()
 
 
-class EncoderConvPretrain(pl.LightningModule):
+class TimeSeriesRepresentationModel(pl.LightningModule):
 
-    def __init__(self, config: dict, scaler, learning_rate: float = None):
+    def __init__(self, config: dict, scaler, learning_rate: float = 0.001):
         super().__init__()
 
         self.scaler = scaler
@@ -248,8 +250,8 @@ class EncoderConvPretrain(pl.LightningModule):
         self.data_window_size = config["data_window_size"] + (config.get("clip_data", 0) * 2)
         self.config = config
         self.h = config["h"]
-        self.learning_rate = learning_rate or config["LR"]
-        self.lr = learning_rate or config["LR"]
+        self.learning_rate = learning_rate
+        self.lr = learning_rate
         self.loss = PreTrainingLoss(config)
         self.res_dropout = nn.Dropout(config["dropout"])
 
@@ -260,14 +262,10 @@ class EncoderConvPretrain(pl.LightningModule):
             for _ in range(config["N"])
         ])
 
+        self.fin_ff = nn.ModuleList([nn.Linear(self.encoding_size, 1, bias=False)
+                                     for _ in range(config["feature_dimension"])])
 
-        self.fin_ff = nn.Linear(self.encoding_size, self.feature_dimension, bias=False) \
-            if not config.get("split_feature_encoding", False) \
-            else nn.ModuleList([nn.Linear(self.encoding_size, 1, bias=False)
-                                for _ in range(config["feature_dimension"])])
-
-        final_dim = ((self.encoding_size // self.h) // (
-                config["classifier_pool_1"] * config["classifier_pool_2"])) * config["N"]
+        final_dim = (self.encoding_size // self.h) * config["N"]
         self.final_dim = final_dim
 
         self.attn_map_classification = config.get("attn_map_classification", False)
@@ -284,8 +282,7 @@ class EncoderConvPretrain(pl.LightningModule):
         residual = None
         # Encoding stack
         for i in range(len(self.layers_encoding)):
-
-            encoding, attn, reverse_attn, residual = self.layers_encoding[i](encoding, mask, residual)
+            encoding, attn, reverse_attn, residual = self.layers_encoding[i](encoding, residual)
 
             reverse_attn_list.append([self.de_clip_data(entry)
                                       for entry in torch.split(reverse_attn, self.feature_dimension, dim=-1)][0])
@@ -293,7 +290,6 @@ class EncoderConvPretrain(pl.LightningModule):
             classifications.append(attn.sum(-2))
 
         classification_result = self.final_classifier(classifications)
-
 
         splits = torch.split(encoding, self.encoding_size, dim=-1)
         splits = [self.fin_ff[i](splits[i]) for i in range(len(splits))]
@@ -406,7 +402,7 @@ class EncoderConvPretrain(pl.LightningModule):
         return loss
 
 
-class EncoderConvFinetuneImputation(EncoderConvPretrain):
+class EncoderConvFinetuneImputation(TimeSeriesRepresentationModel):
     def __init__(self, config: dict, scaler):
 
         super().__init__(config, scaler)
@@ -440,7 +436,7 @@ class EncoderConvFinetuneImputation(EncoderConvPretrain):
         return loss
 
 
-class EncoderConvFinetuneForecasting(EncoderConvPretrain):
+class EncoderConvFinetuneForecasting(TimeSeriesRepresentationModel):
     def __init__(self, config: dict, scaler):
 
         super().__init__(config, scaler)
@@ -489,7 +485,7 @@ class EncoderConvFinetuneForecasting(EncoderConvPretrain):
         return loss
 
 
-class EncoderConvFinetuneClassification(EncoderConvPretrain):
+class EncoderConvFinetuneClassification(TimeSeriesRepresentationModel):
     def __init__(self, config: dict, scaler):
 
         super().__init__(config, scaler)
@@ -511,9 +507,10 @@ class EncoderConvFinetuneClassification(EncoderConvPretrain):
                 [nn.Linear(in_features=self.final_classifier.map_size * 2, out_features=target_classes)
                  for _ in range(self.config["feature_dimension"])])
 
-            self.final_classifier.final_lin1 = nn.Linear(N*target_classes*self.config["feature_dimension"], N*target_classes * 2)
-            self.final_classifier.final_lin2 = nn.Linear(N*target_classes * 2, N*target_classes)
-            self.final_classifier.final_lin3 = nn.Linear(N*target_classes, target_classes)
+            self.final_classifier.final_lin1 = nn.Linear(N * target_classes * self.config["feature_dimension"],
+                                                         N * target_classes * 2)
+            self.final_classifier.final_lin2 = nn.Linear(N * target_classes * 2, N * target_classes)
+            self.final_classifier.final_lin3 = nn.Linear(N * target_classes, target_classes)
 
         for param in self.layers_encoding.parameters():
             param.requires_grad = False
@@ -544,7 +541,7 @@ class EncoderConvFinetuneClassification(EncoderConvPretrain):
 
 
 model_dict = {
-    "pretrain": EncoderConvPretrain,
+    "pretrain": TimeSeriesRepresentationModel,
     "finetune_imputation": EncoderConvFinetuneImputation,
     "finetune_forecasting": EncoderConvFinetuneForecasting,
     "finetune_classification": EncoderConvFinetuneClassification
