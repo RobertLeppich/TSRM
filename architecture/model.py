@@ -498,19 +498,15 @@ class EncoderConvFinetuneClassification(TimeSeriesRepresentationModel):
         super().load_state_dict(state_dict, strict, assign)
         target_classes = self.config.get("target_classes")
         N = self.config.get("N")
-        # replace final classifier
-        if not self.attn_map_classification:
-            self.final_classifier = FinalClassifier(self.final_dim, self.config.get("target_classes"), **self.config)
-        else:
 
-            self.final_classifier.channel_lin_2 = nn.ModuleList(
-                [nn.Linear(in_features=self.final_classifier.map_size * 2, out_features=target_classes)
-                 for _ in range(self.config["feature_dimension"])])
+        self.final_classifier.channel_lin_2 = nn.ModuleList(
+            [nn.Linear(in_features=self.final_classifier.map_size * 2, out_features=target_classes)
+             for _ in range(self.config["feature_dimension"])])
 
-            self.final_classifier.final_lin1 = nn.Linear(N * target_classes * self.config["feature_dimension"],
-                                                         N * target_classes * 2)
-            self.final_classifier.final_lin2 = nn.Linear(N * target_classes * 2, N * target_classes)
-            self.final_classifier.final_lin3 = nn.Linear(N * target_classes, target_classes)
+        self.final_classifier.final_lin1 = nn.Linear(N * target_classes * self.config["feature_dimension"],
+                                                     N * target_classes * 2)
+        self.final_classifier.final_lin2 = nn.Linear(N * target_classes * 2, N * target_classes)
+        self.final_classifier.final_lin3 = nn.Linear(N * target_classes, target_classes)
 
         for param in self.layers_encoding.parameters():
             param.requires_grad = False
