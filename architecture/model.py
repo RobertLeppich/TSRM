@@ -1,14 +1,15 @@
+import random
 from typing import Any, Literal, Mapping
 import torch
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 import torch.nn as nn
 import lightning as pl
 from architecture.utils import add_noise, build_mask, build_mask_from_data
-from architecture.loss_functions import PreTrainingLoss, ImputationLoss, ForecastingLoss, BinaryClassLoss
+from architecture.loss_functions import PreTrainingLoss, ImputationLoss, ForecastingLoss
 from architecture.multiHeadAttention import MultiHeadedAttention
 from architecture.metrics import calc_metrics
 from embedding.data_embedding import DataEmbedding
-
+from experiments.plot import plot_attention_weights
 
 class EncodingLayer(pl.LightningModule):
 
@@ -360,10 +361,12 @@ class TimeSeriesRepresentationModel(pl.LightningModule):
             input_data, input_target, meta, embedding = input_batch
 
         loss = self._run(input_data, input_target, meta, embedding, determine_metrics=True,
-                         calc_real=self.config.get("minmax_scaled", False))
+                         calc_real=self.config.get("minmax_scaled", False),
+                         plot_attention=self.config.get("plot_attention", False))
         return loss
 
-    def _run(self, input_data, input_target, meta, embedding=None, determine_metrics=True, calc_real=False):
+    def _run(self, input_data, input_target, meta, embedding=None, determine_metrics=True, calc_real=False,
+             plot_attention=False):
         # reshape input
         try:
             iteration_batch = input_data.view(self.config["batch_size"],
@@ -390,6 +393,15 @@ class TimeSeriesRepresentationModel(pl.LightningModule):
                          target_imputation=iteration_batch,
                          prediction_binary=classification,
                          target_binary=real_ts.to(self.device), mask=mask.eq(1))
+
+        if plot_attention:
+            if random.randint(0, 10) == 10:
+                # only plot a small sample
+                plot_attention_weights(iteration_batch[real_ts], output[real_ts],
+                                       mask=mask[real_ts],
+                                       attn_map=attn_map,
+                                       batches_to_plot=1)
+
         if determine_metrics:
             metrics = calc_metrics(output=output[real_ts], target=iteration_batch[real_ts],
                                    classification_output=classification,
@@ -399,6 +411,7 @@ class TimeSeriesRepresentationModel(pl.LightningModule):
             self.log_dict(metrics, batch_size=iteration_batch.shape[0])
             self.logger.log_metrics(metrics)
             return metrics
+
         return loss
 
 

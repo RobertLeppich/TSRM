@@ -1,7 +1,8 @@
 import os
 from setups import *
 
-def run_experiments(dry_run=False):
+
+def run_experiments(dry_run=False, plot_attention=True):
 
     if not os.path.exists("data/data_dir") or len(os.listdir("data/data_dir")):
         print("Download data first at: https://drive.google.com/drive/folders/1Sw6LClDcYhy5byltrezagiap9a5sGIfH "
@@ -10,17 +11,16 @@ def run_experiments(dry_run=False):
         exit(0)
 
     # Imputation experiments
-    imputation_air_quality.run(dry_run=dry_run)
-    imputation_electricity.run(dry_run=dry_run)
+    imputation_air_quality.run(dry_run=dry_run, plot_attention=plot_attention)
+    imputation_electricity.run(dry_run=dry_run, plot_attention=plot_attention)
 
-    # forecasting experiments
-    forecasting_electricity.run(dry_run=dry_run)
-    forecasting_traffic.run(dry_run=dry_run)
-    forecasting_ettm2.run(dry_run=dry_run)
+    # Forecasting experiments
+    forecasting_electricity.run(dry_run=dry_run, plot_attention=plot_attention)
+    forecasting_traffic.run(dry_run=dry_run, plot_attention=plot_attention)
+    forecasting_ettm2.run(dry_run=dry_run, plot_attention=plot_attention)
 
-    # classification experiments
-    classification_wsdm.run(dry_run=dry_run)
+    # Classification experiments
+    classification_wsdm.run(dry_run=dry_run, plot_attention=plot_attention)
 
 if __name__ == '__main__':
-
     run_experiments()

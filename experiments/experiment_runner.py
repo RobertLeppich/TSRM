@@ -41,11 +41,11 @@ class ExperimentRun:
         h.update(json.dumps(self.config_finetune, sort_keys=True).encode())
         return h.hexdigest()
 
-    def run(self, dry_run=True, **kwargs):
+    def run(self, dry_run=True, plot_attention=True, **kwargs):
         try:
-            # self.pre_train(dry_run=dry_run)
+            self.pre_train(dry_run=dry_run, plot_attention=plot_attention)
 
-            self.fine_tune(dry_run=dry_run, **kwargs)
+            self.fine_tune(dry_run=dry_run, plot_attention=plot_attention, **kwargs)
 
         except Exception as e:
             if dry_run:
@@ -64,10 +64,11 @@ class ExperimentRun:
         torch.manual_seed(seed)
         np.random.seed(seed)
 
-    def pre_train(self, dry_run=True):
+    def pre_train(self, dry_run=True, plot_attention=False):
 
         base_config = self.config_pretrain
         base_config["dry_run"] = dry_run
+        base_config["plot_attention"] = plot_attention
         base_config["task"] = self.task
         self.set_seeds(base_config["shuffle_seed"])
 
@@ -120,8 +121,9 @@ class ExperimentRun:
         logger.finalize("success")
         return mets
 
-    def fine_tune(self, dry_run=True, **kwargs):
+    def fine_tune(self, dry_run=True, plot_attention=False, **kwargs):
         self.config_finetune["dry_run"] = dry_run
+        self.config_finetune["plot_attention"] = plot_attention
 
         checkpoints = [chkp for chkp in os.listdir(self.create_log_path("pretrain"))
                        if chkp.endswith("ckpt") and "epoch" in chkp]
