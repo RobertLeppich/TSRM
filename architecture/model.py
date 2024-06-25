@@ -395,7 +395,7 @@ class TimeSeriesRepresentationModel(pl.LightningModule):
                          target_binary=real_ts.to(self.device), mask=mask.eq(1))
 
         if plot_attention:
-            if random.randint(0, 10) == 10:
+            if random.randint(0, 20) == 20:
                 # only plot a small sample
                 plot_attention_weights(iteration_batch[real_ts], output[real_ts],
                                        mask=mask[real_ts],
@@ -421,7 +421,8 @@ class EncoderConvFinetuneImputation(TimeSeriesRepresentationModel):
         super().__init__(config, scaler)
         self.loss = ImputationLoss(config)
 
-    def _run(self, input_data, input_target, meta, embedding=None, determine_metrics=True, calc_real=False):
+    def _run(self, input_data, input_target, meta, embedding=None, determine_metrics=True, calc_real=False,
+             plot_attention=False):
         start_dimension = input_data.shape[-1]
         try:
             iteration_batch = input_data.view(self.config["batch_size"],
@@ -460,7 +461,8 @@ class EncoderConvFinetuneForecasting(TimeSeriesRepresentationModel):
         for param in self.final_classifier.parameters():
             param.requires_grad = False
 
-    def _run(self, input_data, input_target, meta, embedding=None, determine_metrics=True, calc_real=False):
+    def _run(self, input_data, input_target, meta, embedding=None, determine_metrics=True, calc_real=False,
+             plot_attention=False):
         start_dimension = input_data.shape[-1]
         try:
             iteration_batch = input_data.view(self.config["batch_size"],
@@ -524,7 +526,8 @@ class EncoderConvFinetuneClassification(TimeSeriesRepresentationModel):
         for param in self.layers_encoding.parameters():
             param.requires_grad = False
 
-    def _run(self, input_data, input_target, meta, embedding=None, determine_metrics=True, calc_real=False):
+    def _run(self, input_data, input_target, meta, embedding=None, determine_metrics=True, calc_real=False,
+             plot_attention=False):
         start_dimension = input_data.shape[-1]
         try:
             iteration_batch = input_data.view(self.config["batch_size"],

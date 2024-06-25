@@ -121,9 +121,8 @@ class ExperimentRun:
         logger.finalize("success")
         return mets
 
-    def fine_tune(self, dry_run=True, plot_attention=False, **kwargs):
+    def fine_tune(self, dry_run=True, **kwargs):
         self.config_finetune["dry_run"] = dry_run
-        self.config_finetune["plot_attention"] = plot_attention
 
         checkpoints = [chkp for chkp in os.listdir(self.create_log_path("pretrain"))
                        if chkp.endswith("ckpt") and "epoch" in chkp]
