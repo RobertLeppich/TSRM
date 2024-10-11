@@ -1,189 +1,162 @@
 import torch
 from lightning.pytorch.callbacks import DeviceStatsMonitor
-from architecture.model import TimeSeriesRepresentationModel, model_dict
-from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint, Timer
-from lightning.pytorch.loggers import TensorBoardLogger
+from architecture.model import model_dict
+from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint
+from lightning.pytorch.loggers import MLFlowLogger
+from pytorch_lightning.utilities.model_summary import ModelSummary
 from lightning.pytorch.tuner import Tuner
 import lightning.pytorch as pl
-import pandas as pd
 import numpy as np
 import os
-import yaml
 import time
+from datetime import datetime
+from zoneinfo import ZoneInfo
 import json
 import hashlib
 import random
 from typing import Literal
+from data_provider.data_factory import data_provider
+
 
 torch.set_float32_matmul_precision("medium")
 
 
 class ExperimentRun:
 
-    def __init__(self, dataset, config_str: str,
-                 task: Literal["finetune_imputation", "finetune_forecasting", "finetune_classification"]):
+    def __init__(self, experiment, config: dict, phase: Literal["pretrain", "finetune", "downstream"]):
 
-        self.dataset = dataset
-        self.task = task
-        self.config_str = config_str
-        self.config_pretrain = yaml.safe_load(open(f"experiments/configs/{config_str}_pretrain.yml"))
-        self.config_finetune = yaml.safe_load(open(f"experiments/configs/{config_str}_pretrain.yml"))
-        self.config_finetune.update(yaml.safe_load(open(f"experiments/configs/{config_str}_finetune.yml")))
+        self.experiment = experiment
+        self.base_config = experiment.config
+        self.exp_run_config = config
+        self.phase = phase
 
         self.run_id = self.generate_run_id()
-        self.exp_id = None
 
-    def generate_run_id(self):
+    def generate_run_id(self, phase=None):
         h = hashlib.md5()
-        h.update(str(self.dataset).encode())
-        h.update(self.task.encode())
-        h.update(json.dumps(self.config_pretrain, sort_keys=True).encode())
-        h.update(json.dumps(self.config_finetune, sort_keys=True).encode())
+        h.update(self.experiment.task.encode())
+        h.update((phase or self.phase).encode())
+        h.update(self.experiment.get_exp_run_id().encode())
+        h.update(json.dumps(self.exp_run_config, sort_keys=True).encode())
+        h.update(json.dumps(self.base_config, sort_keys=True).encode())
+
         return h.hexdigest()
 
-    def run(self, dry_run=True, plot_attention=True, **kwargs):
-        try:
-            self.pre_train(dry_run=dry_run, plot_attention=plot_attention)
-
-            self.fine_tune(dry_run=dry_run, plot_attention=plot_attention, **kwargs)
-
-        except Exception as e:
-            if dry_run:
-                raise e
-            print(f"Error: {e}")
-            time.sleep(10)
-
-
-    def create_log_path(self, phase, checkpoint_path="model_checkpoints"):
+    def create_log_path(self, checkpoint_path="model_checkpoints", phase=None, run_id=None):
         if not os.path.exists(checkpoint_path):
             os.makedirs(checkpoint_path)
-        return os.path.join(checkpoint_path, self.run_id, phase)
+        return os.path.join(checkpoint_path, self.experiment.get_exp_run_id(), phase or self.phase,
+                            run_id or self.run_id)
 
     def set_seeds(self, seed):
         random.seed(seed)
         torch.manual_seed(seed)
         np.random.seed(seed)
 
-    def pre_train(self, dry_run=True, plot_attention=False):
+    def run(self, dry_run=False, pre_train_run_id=None, log_path_checkpoint=None):
+        checkpoint = None
+        exp_run_config = self.exp_run_config
 
-        base_config = self.config_pretrain
-        base_config["dry_run"] = dry_run
-        base_config["plot_attention"] = plot_attention
-        base_config["task"] = self.task
-        self.set_seeds(base_config["shuffle_seed"])
+        if self.phase == "finetune":
+            checkpoints = [chkp for chkp in os.listdir(log_path_checkpoint or self.create_log_path(phase="pretrain", run_id=pre_train_run_id))
+                           if chkp.endswith("ckpt") and "epoch" in chkp]
+            if len(checkpoints) == 0:
+                raise IOError("Could not find checkpoints of pretrained model")
+            checkpoint = os.path.join(log_path_checkpoint or self.create_log_path(phase="pretrain", run_id=pre_train_run_id), checkpoints[0])
 
-        print(f"Start pretrain ({self.config_str}): run_id: {self.run_id} \nconfig:{str(base_config)}")
+        exp_run_config["dry_run"] = dry_run
+        exp_run_config["task"] = self.experiment.task
+        exp_run_config["phase"] = self.phase
+        exp_run_config["num_workers"] = exp_run_config.get("num_workers", 2) if not dry_run else 0
+        self.set_seeds(exp_run_config["shuffle_seed"])
+
+        print(f"Start {self.phase} ({self.experiment.get_exp_run_id()}): ({self.run_id}) \nconfig:{str(exp_run_config)}")
 
         try:
 
-            log_path = self.create_log_path("pretrain")
-            metrics = self.run_config_pre_train(base_config, path=log_path)
+            log_path = self.create_log_path()
+            start_time = time.time()
+            metrics = self.run_config(exp_run_config, path=log_path, checkpoint=checkpoint)
+            elapsed_time = time.time() - start_time
 
-            print(f"Finished pretrain ({self.config_str}): run_id: {self.run_id} \n{str(metrics)}")
+            result_dict = {
+                "exp_id": self.experiment.exp_id,
+                "codename": self.experiment.codename,
+                "run_id": self.run_id,
+                "phase": self.phase,
+                "timestamp": datetime.now(tz=ZoneInfo("Europe/Berlin")),
+                "metrics": metrics,
+                "elapsed_time_minutes": elapsed_time / 60,
+                "config": exp_run_config,
+                "log_path": log_path
+            }
+            # if you want to save for later evaluation, implement logic here.
+
+            print(f"Finished {self.phase} ({self.experiment.get_exp_run_id()}): ({self.run_id})\n{str(metrics)}")
 
         except Exception as se:
             if dry_run:
                 raise se
             print(f"ERROR: {se}")
 
-    def run_config_pre_train(self, config, path: str):
-        dataset = self.dataset(config)
+    def run_config(self, config, path: str, checkpoint=None):
+        if self.phase == "finetune" and checkpoint is None:
+            raise IOError("No Checkpoint set")
 
-        train_loader, validation_loader, test_loader = dataset.get_pretrain_loader()
+        train_data, train_loader = data_provider(config, flag="train")
+        validation_data, validation_loader = data_provider(config, flag="val")
+        test_data, test_loader = data_provider(config, flag="test")
 
-        model = TimeSeriesRepresentationModel(config=config, scaler=dataset.scaler)
+        if self.phase == "pretrain":
+            model = model_dict["pretrain"](config=config)
+
+        elif self.phase == "finetune":
+            model = model_dict[self.experiment.task].load_from_checkpoint(checkpoint, config=config)
+        else:  # downstream
+            model = model_dict[self.experiment.task](config=config)
+
+        model.float()
+
+        print(f"Trainable Parameter: {ModelSummary(model).trainable_parameters}")
 
         early_stopping = EarlyStopping(monitor="loss",
                                        min_delta=config["earlystopping_min_delta"],
                                        patience=config["earlystopping_patience"], verbose=True, mode="min")
-        checkpoint_callback = ModelCheckpoint(dirpath=path, save_top_k=1, monitor="loss")
-        logger = TensorBoardLogger(path, name="log")
-        logger.log_hyperparams(config)
+        checkpoint_callback = ModelCheckpoint(dirpath=path, save_top_k=1, monitor="loss", every_n_epochs=1)
+        # logger = TensorBoardLogger(path, name="log")
+        # logger.log_hyperparams(config)
 
-        trainer = pl.Trainer(devices=1, accelerator="gpu", log_every_n_steps=40,
-                             callbacks=([early_stopping] + [checkpoint_callback])
+        mlflow = MLFlowLogger(experiment_name=self.experiment.get_exp_run_id(), run_name=self.phase + "_" + self.run_id, tracking_uri="http://localhost:5000")
+        mlflow.log_hyperparams(config)
+        trainer = pl.Trainer(devices=1, accelerator="gpu", precision="16-mixed",
+                             callbacks=([early_stopping, checkpoint_callback])
                              if not config["dry_run"] else [DeviceStatsMonitor(cpu_stats=True)],
-                             default_root_dir=path, logger=logger, profiler="simple" if config["dry_run"] else None)
+                             default_root_dir=path, logger=[mlflow], profiler="simple" if config["dry_run"] else None)
 
-        tuner = Tuner(trainer)
-        tuner.lr_find(model, train_dataloaders=train_loader, val_dataloaders=validation_loader, min_lr=1e-4,
-                      max_lr=0.01)
+        if self.phase != "finetune":
+            tuner = Tuner(trainer)
+            tuner.lr_find(model, train_dataloaders=train_loader, val_dataloaders=validation_loader, min_lr=1e-4,
+                          max_lr=0.01)
 
-        trainer.fit(model, train_dataloaders=train_loader, val_dataloaders=validation_loader)
+            trainer.fit(model, train_dataloaders=train_loader, val_dataloaders=validation_loader)
+            model.training = False
+            trainer.test(ckpt_path="best", dataloaders=test_loader)
+        else:
+            trainer.test(model, dataloaders=test_loader)
 
-        trainer.test(ckpt_path="best", dataloaders=test_loader)
 
         mets = {k: v.item() for k, v in trainer.logged_metrics.items()}
         mets.update({"version": trainer.logger.version})
         if "loss" not in mets.keys():
             raise IOError("No loss in metrics")
 
-        logger.finalize("success")
+        model_summary = ModelSummary(model)
+        mets.update({
+            "trainable_parameter": model_summary.trainable_parameters
+        })
+
+        [log.finalize("success") for log in trainer.loggers]
+
         return mets
 
-    def fine_tune(self, dry_run=True, **kwargs):
-        self.config_finetune["dry_run"] = dry_run
-
-        checkpoints = [chkp for chkp in os.listdir(self.create_log_path("pretrain"))
-                       if chkp.endswith("ckpt") and "epoch" in chkp]
-        if len(checkpoints) == 0:
-            raise IOError("Could not find checkpoints of pretrained model")
-        checkpoint = checkpoints[0]
-
-        base_config = self.config_finetune
-
-        print(f"Start finetune ({self.config_str}): run_id: {self.run_id} \nconfig:{str(base_config)}")
-
-        self.set_seeds(base_config["shuffle_seed"])
-
-        try:
-
-            metrics = self.run_config_fine_tune(base_config, checkpoint)
-            best_metrics = pd.concat([pd.Series(entry) for entry in metrics], axis=1)
-
-            print(f"Finished finetune ({self.config_str}): run_id: {self.run_id}:\n{str(best_metrics)}")
-
-        except Exception as e:
-            if dry_run:
-                raise e
-            print(f"ERROR: {e}")
-
-    def run_config_fine_tune(self, config, checkpoint):
-        dataset = self.dataset(config)
-        path = self.create_log_path("finetune")
-
-        metrics = []
-        split_num = 0
-        for train_loader, val_loader, test_loader in dataset.cv_split():
-            model = model_dict[self.task].load_from_checkpoint(
-                self.create_log_path("pretrain") + f"/{checkpoint}",
-                config=config, scaler=dataset.scaler)
-
-            early_stopping = EarlyStopping(monitor="loss",
-                                           min_delta=config["earlystopping_min_delta"],
-                                           patience=config["earlystopping_patience"], verbose=True, mode="min")
-            checkpoint_callback = ModelCheckpoint(dirpath=path, save_top_k=1,
-                                                  monitor="mse_missing" if self.task != "finetune_classification" else "f1_classification")
-            logger = TensorBoardLogger(path, name="log")
-
-
-            trainer = pl.Trainer(devices=1, accelerator="gpu", log_every_n_steps=40,
-                                 callbacks=[early_stopping] + (
-                                     [checkpoint_callback] if not config["dry_run"] else []),
-                                 default_root_dir=path, logger=logger)
-
-            tuner = Tuner(trainer)
-            tuner.lr_find(model, train_dataloaders=train_loader, val_dataloaders=val_loader, min_lr=1e-4,
-                          max_lr=0.01)
-
-            trainer.fit(model, train_dataloaders=train_loader, val_dataloaders=val_loader)
-
-            trainer.test(ckpt_path="best", dataloaders=test_loader)
-            mets = {k: v.item() for k, v in trainer.logged_metrics.items()}
-            mets.update({"version": trainer.logger.version})
-
-            metrics.append(pd.Series(mets, name=f"split_{split_num}"))
-            split_num += 1
-
-        return metrics
 

@@ -120,6 +120,10 @@ class ProbAttention(nn.Module):
         B, H, L_Q, D = queries.shape
         _, _, L_K, _ = keys.shape
 
+        # queries = queries.transpose(2, 1)
+        # keys = keys.transpose(2, 1)
+        # values = values.transpose(2, 1)
+
         U_part = self.factor * np.ceil(np.log(L_K)).astype('int').item()  # c*ln(L_k)
         u = self.factor * np.ceil(np.log(L_Q)).astype('int').item()  # c*ln(L_q)
 
@@ -163,46 +167,68 @@ class ProbEntmax15Attention(ProbAttention):
 class MultiHeadedAttention(nn.Module):
 
     def __init__(self, h: int, encoding_size: int,
-                 attention_func: Literal["classic", "propsparse", "entmax15", "propsparse_entmax15", "fourier1" ]="classic",
-                 dropout=0.1, feature_dimension=1,
+                 attention_func: Literal["classic", "propsparse", "entmax15", "propsparse_entmax15", "fourier1", "no"]="classic",
+                 dropout=0.1, ts_attention=True, split_feature_encoding=False,  feature_dimension=1,
                  **kwargs):
 
         super(MultiHeadedAttention, self).__init__()
 
         self.h = h
+        self.split_feature_encoding = split_feature_encoding
         self.feature_dimension = feature_dimension
         self.encoding_size = encoding_size
 
-        self.lin_query = nn.ModuleList([nn.Linear(encoding_size, encoding_size) for _ in range(feature_dimension)])
-        self.lin_key = nn.ModuleList([nn.Linear(encoding_size, encoding_size) for _ in range(feature_dimension)])
-        self.lin_values = nn.ModuleList([nn.Linear(encoding_size, encoding_size) for _ in range(feature_dimension)])
-        self.lin_fin = nn.ModuleList([nn.Linear(encoding_size, encoding_size) for _ in range(feature_dimension)])
+        self.ts_attention = ts_attention
 
-        self.dropout = nn.Dropout(p=dropout)
-        if attention_func == "propspares":
+        if attention_func == "propsparse":
             self.attention = ProbAttention(output_attention=True)
         elif attention_func == "propsparse_entmax15":
             self.attention = ProbEntmax15Attention(output_attention=True)
         elif attention_func == "entmax15":
             self.attention = attention_entmax15
-        else:
+        elif attention_func == "classic":
             self.attention = attention
+        elif attention_func == "no":
+            self.attention = None
+            return  # no need to initialize the rest
+
+        if not split_feature_encoding:
+            self.lin_query = nn.Linear(encoding_size, encoding_size)
+            self.lin_key = nn.Linear(encoding_size, encoding_size)
+            self.lin_values = nn.Linear(encoding_size, encoding_size)
+
+            self.lin_fin = nn.Linear(encoding_size, encoding_size)
+        else:
+            self.lin_query = nn.ModuleList([nn.Linear(encoding_size, encoding_size) for _ in range(feature_dimension)])
+            self.lin_key = nn.ModuleList([nn.Linear(encoding_size, encoding_size) for _ in range(feature_dimension)])
+            self.lin_values = nn.ModuleList([nn.Linear(encoding_size, encoding_size) for _ in range(feature_dimension)])
+            self.lin_fin = nn.ModuleList([nn.Linear(encoding_size, encoding_size) for _ in range(feature_dimension)])
+
+        self.dropout = nn.Dropout(p=dropout)
+
 
     def forward(self, query, key, value, mask=None):
+        if self.attention is None:
+            return query, None
 
-        result, attns = [], []
-        queries, keys, values = (torch.split(query, self.encoding_size, -1),
+        if not self.split_feature_encoding:
+            return self.forward_single(query, key, value, self.lin_query, self.lin_key, self.lin_values,
+                                       self.attention, self.lin_fin, mask=mask)
+
+        else:
+            result, attns = [], []
+            queries, keys, values = (torch.split(query, self.encoding_size, -1),
                                      torch.split(key, self.encoding_size, -1),
                                      torch.split(value, self.encoding_size, -1))
-        for i in range(self.feature_dimension):
-            i_res, i_attn = self.forward_single(queries[i], keys[i], values[i],
+            for i in range(self.feature_dimension):
+                i_res, i_attn = self.forward_single(queries[i], keys[i], values[i],
                                                     self.lin_query[i], self.lin_key[i], self.lin_values[i],
                                                     self.attention, self.lin_fin[i], mask=mask)
-            result.append(i_res)
-            if i_attn is not None:
-                attns.append(i_attn.unsqueeze(-1))
+                result.append(i_res)
+                if i_attn is not None:
+                    attns.append(i_attn.unsqueeze(-1))
 
-        return torch.cat(result, -1), torch.cat(attns, -1) if len(attns) > 0 else None
+            return torch.cat(result, -1), torch.cat(attns, -1) if len(attns) > 0 else None
 
     def forward_single(self, query, key, value, lin_query, lin_key, lin_values, attention, lin_fin, mask=None):
         nbatches = query.size(0)
@@ -211,6 +237,11 @@ class MultiHeadedAttention(nn.Module):
         query = lin_query(query).view(nbatches, -1, self.h, self.encoding_size // self.h).transpose(1, 2)
         key = lin_key(key).view(nbatches, -1, self.h, self.encoding_size // self.h).transpose(1, 2)
         value = lin_values(value).view(nbatches, -1, self.h, self.encoding_size // self.h).transpose(1, 2)
+
+        if not self.ts_attention:
+            query = query.transpose(-1, -2)
+            key = key.transpose(-1, -2)
+            value = value.transpose(-1, -2)
 
         # 2) Apply attention on all the projected vectors in batch.
         x, attn = attention(query, key, value, mask=mask,

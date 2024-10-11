@@ -2,18 +2,13 @@ import torch
 import random
 
 
-def build_mask(batch_size, window_size, feat_dim, /, *, data, mask_size=10, mask_var_length=10, mask_count=4,
-               mask_offset=20,
-               horizon=20, **kwargs):
-    mask = torch.zeros((batch_size, window_size, feat_dim), dtype=torch.bool, device=data.device)
-    mask[torch.where(data == -1)] = True
-
-    if horizon is not None and horizon > 0:
-        mask[:, -horizon:, :] = True
+def build_mask(batch_size, window_size, feat_dim, /, *, data_batch, mask_size=10, mask_var_length=10, mask_count=4,
+               mask_offset=20, pred_len=0, phase="pretrain", task="forecasting", **kwargs):
+    mask = torch.zeros((batch_size, window_size, feat_dim), dtype=torch.bool, device=data_batch.device)
+    mask[torch.where(data_batch == -1)] = True
 
     if mask_count > 0:
         area_between = window_size - 2 * mask_offset - mask_count * mask_size
-        area_between -= horizon or 0
 
         area_between = area_between // mask_count
 

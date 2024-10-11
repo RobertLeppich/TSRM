@@ -4,23 +4,30 @@ from setups import *
 
 def run_experiments(dry_run=False, plot_attention=True):
 
-    if not os.path.exists("data/data_dir") or len(os.listdir("data/data_dir")):
-        print("Download data first at: https://drive.google.com/drive/folders/1Sw6LClDcYhy5byltrezagiap9a5sGIfH "
-              "and save into 'data/data_dir' folder")
-        os.makedirs("data/data_dir", exist_ok=True)
+    if not os.path.exists("data_dir") or len(os.listdir("data_dir")):
+        print("Download data first at: https://drive.google.com/drive/folders/1ZOYpTUa82_jCcxIdTmyr0LXQfvaM9vIy "
+              "and save into 'data_dir' folder")
+        os.makedirs("data_dir", exist_ok=True)
         exit(0)
 
-    # Imputation experiments
-    imputation_air_quality.run(dry_run=dry_run, plot_attention=plot_attention)
-    imputation_electricity.run(dry_run=dry_run, plot_attention=plot_attention)
-
     # Forecasting experiments
-    forecasting_electricity.run(dry_run=dry_run, plot_attention=plot_attention)
-    forecasting_traffic.run(dry_run=dry_run, plot_attention=plot_attention)
-    forecasting_ettm2.run(dry_run=dry_run, plot_attention=plot_attention)
+    tsrm_fc_elc.run_downstream(dry_run=dry_run)
+    tsrm_fc_ettm2.run_downstream(dry_run=dry_run)
+    tsrm_fc_traffic.run_downstream(dry_run=dry_run)
+    tsrm_fc_ettm1.run_downstream(dry_run=dry_run)
+    tsrm_fc_etth1.run_downstream(dry_run=dry_run)
+    tsrm_fc_etth2.run_downstream(dry_run=dry_run)
+    tsrm_fc_exchange.run_downstream(dry_run=dry_run)
+    tsrm_fc_weather.run_downstream(dry_run=dry_run)
 
-    # Classification experiments
-    classification_wsdm.run(dry_run=dry_run, plot_attention=plot_attention)
+    # Imputation experiments
+    tsrm_imp_elc.run_downstream(dry_run=dry_run)
+    tsrm_imp_ettm1.run_downstream(dry_run=dry_run)
+    tsrm_imp_ettm2.run_downstream(dry_run=dry_run)
+    tsrm_imp_etth1.run_downstream(dry_run=dry_run)
+    tsrm_imp_etth2.run_downstream(dry_run=dry_run)
+    tsrm_imp_weather.run_downstream(dry_run=dry_run)
+
 
 if __name__ == '__main__':
     run_experiments()

@@ -1,0 +1,48 @@
+
+
+# Data
+root_path: data_dir/
+data_path: national_illness.csv
+data: custom
+features: M  # forecasting task: M: multivariate -> multivariate, S: univariate -> univariate, MS: multivariate -> univariate
+target: OT  # only relevant in S und MS
+freq: h  # freq for time features encoding, options:[s:secondly, t:minutely, h:hourly, d:daily, b:business days, w:weekly, m:monthly], you can also use more detailed freq like 15min or 3h
+num_workers: 2
+
+seq_len: 24
+pred_len: 24
+label_len: 0
+feature_dimension: 7
+
+embed: fixed  # time features encoding, options:[timeF, fixed, learned]
+
+# Training
+lr_optimizer: true
+validation_size: 0.2
+test_size: 0.3
+optimizer: adam
+batch_size: 8
+shuffle: true
+shuffle_seed: 42
+
+
+# Model
+h: 4
+encoding_size: 16
+N: 3
+conv_dims: [[0.1, 1, -1], [0.2, 1, -1], [0.6, 1, -1]]
+n_kernel: 1
+attention_func: "classic"
+dropout: 0.25
+add_pooled_representations: false
+split_feature_encoding: false
+revin: true
+
+# Loss
+loss_function_forecasting: mse+mae
+
+# Early stopping
+earlystopping_patience: 5
+earlystopping_min_delta: .01
+earlystopping_percentage: True
+

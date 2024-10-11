@@ -33,7 +33,9 @@ class ImputationLoss:
             loss_unmasked = self.loss_function(torch.masked_select(prediction, ~mask),
                                                torch.masked_select(target, ~mask))
             return loss_unmasked + (loss_masked * self.config["loss_weight_alpha"])
-
+        elif self.config["loss_imputation_mode"] == "imputation_only":
+            return self.loss_function(torch.masked_select(prediction, mask),
+                                      torch.masked_select(target, mask))
         else:
             raise IOError("Unknown loss mode")
 

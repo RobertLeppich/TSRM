@@ -7,6 +7,5 @@ torch~=2.1.1
 wfdb~=4.1.2
 lightning~=2.0.7
 PyYAML~=6.0.1
-pymongo~=4.5.0
-gdown==5.2.0
 tensorboardx==2.6.2.2
+mlflow==2.16.0

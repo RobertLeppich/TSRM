@@ -14,7 +14,7 @@ def rescale(data, scaler, meta):
 def calc_metrics(output=None, target=None, mask=None, scaler=None, classification_output=None, classification_target=None, meta=None,
                  calc_real=False, prefix="", classification_finetune=False, num_classes=None):
     if mask is None:
-        mask = np.zeros_like(output)
+        mask = torch.ones_like(output).bool().to(output.device)
 
 
     if classification_finetune:
